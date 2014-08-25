@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -11,6 +12,7 @@ struct alert {
    struct tm * alert_time;
    char * title;
    char * email;
+   int fired; 
 };
 
 struct alert * alert_def = NULL;
@@ -27,18 +29,32 @@ void usage() {
 void * alert_manager() {
    int done = 0;
    time_t alert_time_epoch;
-   alert_time_epoch = mktime(alert_def->alert_time);
    while (done==0) {
-      printf("now %lld\n",(long long)time(NULL));
-      printf("alert %lld\n",(long long)alert_time_epoch);
+      int i;
 
-      if (time(NULL) > alert_time_epoch) {
-         char mailer_cmd[100];
-         sprintf(mailer_cmd,"mail -s %s %s < alert_message",alert_def->title,alert_def->email);
-	 system(mailer_cmd);
-         done = 1;
+      for (i=0;i<alert_count;i++) {
+         printf("mail thread loop\n");
+         if (alert_defs[i].fired == 1) {
+            continue;
+         }
+
+         alert_time_epoch = mktime(alert_defs[i].alert_time);
+         if (time(NULL) > alert_time_epoch) {
+            char mailer_cmd[100];
+            printf("%s \n",alert_defs[i].email);
+            sprintf(mailer_cmd,"mail -s %s %s < alert_message",alert_defs[i].title,alert_defs[i].email);
+	    system(mailer_cmd);
+            alert_defs[i].fired = 1;
+         }
       }
       usleep(1000);
+      int all_fired_flag = 1;
+      for (i=0;i<alert_count;i++) {
+         if (alert_defs[i].fired==0)
+            all_fired_flag = 0;
+      }
+      if (all_fired_flag == 1)
+         done = 1;
    }
 }
 
@@ -50,22 +66,17 @@ void parse_alert_file(char * filename) {
 }
 
 void alert_def_print(struct alert * alert_def, FILE * f) {
-   return; 
    fprintf(f,"\"month\":%d,",alert_def->alert_time->tm_mon);
    fprintf(f,"\"day\":%d,",alert_def->alert_time->tm_mday);
    fprintf(f,"\"hour\":%d,",alert_def->alert_time->tm_hour);
    fprintf(f,"\"minute\":%d,",alert_def->alert_time->tm_min);
-   fprintf(f,"\"title\":%s,",alert_def->title);
-   fprintf(f,"\"email\":%s",alert_def->email);
+   fprintf(f,"\"title\":\"%s\",",alert_def->title);
+   fprintf(f,"\"email\":\"%s\"",alert_def->email);
 }
 
 void * json_printer() {
    int i;
    FILE *f = fopen(WEB_FILE,"wb");
-   if (f==NULL)
-      printf("File failed to open\n");
-      return;
-   printf("print access");
    fprintf(f,"[");
    for (i=0;i<alert_count;i++) {
       fprintf(f,"{");
@@ -79,6 +90,17 @@ void * json_printer() {
       }
    }
    fprintf(f,"]");
+   fclose(f);
+}
+
+int get_alert_count(char * emails) {
+   char * email = strtok(emails,",");
+   int count = 0;
+   while (email!=NULL) {
+      count=count+1;
+      email = strtok(NULL,",");
+   }
+   return count;
 }
 
 int main(int argc, char ** argv) {
@@ -97,12 +119,30 @@ int main(int argc, char ** argv) {
       alert_time.tm_min = atoi(argv[4]);
       alert_time.tm_sec = 0;
       char * title = argv[5];
-      char * email = argv[6];
       alert_def = (struct alert *) malloc(sizeof(struct alert));
       alert_def->alert_time = &alert_time;
       alert_def->title = title;
-      alert_def->email = email;
+      alert_def->email = argv[6];
       alert_defs[alert_count] = *alert_def;
+
+
+      alert_count = get_alert_count(argv[6]);
+
+      int i;
+      char * email_tmp = strtok(argv[6],",");
+      for (i=0;i<alert_count;i++) {
+         struct alert alert_tmp;
+         alert_tmp.alert_time = &alert_time;
+         alert_tmp.title = title;
+         printf("inner email %s\n",email_tmp);
+         alert_tmp.email = email_tmp;
+         alert_tmp.fired = 0;
+         alert_defs[i] = alert_tmp;
+         if (i == alert_count-1)
+            break;
+         email_tmp = strtok(NULL,",");
+      }
+
       pthread_t alert_thread;
       pthread_t json_thread;
       if (pthread_create(&alert_thread,NULL,alert_manager,NULL)) {
